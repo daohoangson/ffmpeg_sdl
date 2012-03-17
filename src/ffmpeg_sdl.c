@@ -3,6 +3,7 @@
 #include <libswscale/swscale.h>
 #include <libavutil/avstring.h>
 #include <libavutil/pixfmt.h>
+#include <libavutil/log.h>
 #include <SDL.h>
 #include <SDL_thread.h>
 #ifdef __MINGW32__
@@ -22,7 +23,7 @@
 #define FF_REFRESH_EVENT (SDL_USEREVENT + 1)
 #define FF_QUIT_EVENT (SDL_USEREVENT + 2)
 #define VIDEO_PICTURE_QUEUE_SIZE 1
-#define DEFAULT_AV_SYNC_TYPE AV_SYNC_VIDEO_MASTER
+#define DEFAULT_AV_SYNC_TYPE AV_SYNC_EXTERNAL_MASTER
 
 typedef struct PacketQueue {
     AVPacketList *first_pkt, *last_pkt;
@@ -44,8 +45,7 @@ typedef struct VideoState {
     int             videoStream, audioStream;
 
     int             av_sync_type;
-    double          external_clock; // external clock base
-    int64_t         external_clock_time;
+    double          external_clock_base; // external clock base
     int             seek_req;
     int             seek_flags;
     int64_t         seek_pos;
@@ -198,8 +198,9 @@ double get_audio_clock(VideoState *is) {
     pts = is->audio_clock; // maintained in the audio thread
     hw_buf_size = is->audio_buf_size - is->audio_buf_index;
     bytes_per_sec = 0;
-    n = is->audio_st->codec->channels * 2;
     if (is->audio_st) {
+        // sondh fixed this
+        n = is->audio_st->codec->channels * 2;
         bytes_per_sec = is->audio_st->codec->sample_rate * n;
     }
     if (bytes_per_sec) {
@@ -216,7 +217,7 @@ double get_video_clock(VideoState *is) {
 }
 
 double get_external_clock(VideoState *is) {
-  return av_gettime() / 1000000.0;
+  return (av_gettime() / 1000000.0) - is->external_clock_base;
 }
 
 double get_master_clock(VideoState *is) {
@@ -242,42 +243,39 @@ int synchronize_audio(VideoState *is, AVFrame *decoded_frame, int decoded_data_s
 
         ref_clock = get_master_clock(is);
         diff = get_audio_clock(is) - ref_clock;
-        if (diff < AV_NOSYNC_THRESHOLD) {
+        // sondh fixed this
+        if (fabs(diff) < AV_NOSYNC_THRESHOLD) {
             // accumulate the diffs
             is->audio_diff_cum = diff + is->audio_diff_avg_coef * is->audio_diff_cum;
             if (is->audio_diff_avg_count < AUDIO_DIFF_AVG_NB) {
                 is->audio_diff_avg_count++;
             } else {
                 avg_diff = is->audio_diff_cum * (1.0 - is->audio_diff_avg_coef);
+                
                 if (fabs(avg_diff) >= is->audio_diff_threshold) {
                     wanted_size = decoded_data_size + ((int)(diff * is->audio_st->codec->sample_rate) * n);
+                    // sondh fixed this
                     min_size = decoded_data_size * ((100 - SAMPLE_CORRECTION_PERCENT_MAX) / 100);
-                    max_size = decoded_data_size * ((100 + SAMPLE_CORRECTION_PERCENT_MAX) / 100);
-                    
+                    max_size = decoded_data_size * ((100 + SAMPLE_CORRECTION_PERCENT_MAX) / 100.0);
+
                     if (wanted_size < min_size) {
                         wanted_size = min_size;
                     } else if (wanted_size > max_size) {
                         wanted_size = max_size;
                     }
                     
-                    if(wanted_size < decoded_data_size) {
+                    fprintf(stderr, "diff = %f, avg_diff = %f, wanted = %d, decoded = %d\n",
+                            diff, avg_diff,
+                            wanted_size, decoded_data_size);
+                    
+                    if (wanted_size < decoded_data_size) {
                         // remove samples
                         decoded_data_size = wanted_size;
-                    } else if(wanted_size > decoded_data_size) {
-                        uint8_t *samples_end, *q;
-                        int nb;
-                        
-                        // add samples by copying final sample
-                        nb = (decoded_data_size - wanted_size);
-                        samples_end = (uint8_t *)decoded_frame->data[0] + decoded_data_size - n;
-                        q = samples_end + n;
-                        while (nb > 0) {
-                            memcpy(q, samples_end, n);
-                            q += n;
-                            nb -= n;
-                        }
-                        
-                        decoded_data_size = wanted_size;
+                        fprintf(stderr, "Resized!\n");
+                    } else if (wanted_size > decoded_data_size) {
+                        // sondh fixed this
+                        SDL_Delay(diff * 1000);
+                        fprintf(stderr, "DELAYED!\n");
                     }
                 }
             }
@@ -494,7 +492,7 @@ void video_refresh_timer(void *userdata) {
                 // Really it should skip the picture instead
                 actual_delay = 0.010;
             }
-    
+
             schedule_refresh(is, (int)(actual_delay * 1000 + 0.5));
 
             // show the picture!
@@ -832,6 +830,8 @@ int decode_thread(void *arg) {
     pFormatCtx->interrupt_callback = int_cb;
 
     is->pFormatCtx = pFormatCtx;
+    is->external_clock_base = 0;
+    is->external_clock_base = get_external_clock(is);
 
     // Retrieve stream information
     if (avformat_find_stream_info(pFormatCtx, NULL) < 0) {
@@ -876,6 +876,10 @@ int decode_thread(void *arg) {
         if (is->seek_req) {
             int stream_index = -1;
             int64_t seek_target = is->seek_pos;
+            
+            //sondh fixed this
+            is->external_clock_base = 0;
+            is->external_clock_base = get_external_clock(is) - (seek_target / 1000000.0);
 
             if     (is->videoStream >= 0) stream_index = is->videoStream;
             else if(is->audioStream >= 0) stream_index = is->audioStream;

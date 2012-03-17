@@ -1,7 +1,11 @@
+#ifdef __WIN_VS2010
+#include "vs2010.h"
+#endif
+
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
 #include <libswscale/swscale.h>
-#include "libswresample/swresample.h" // sondh this is so stupid
+#include <libswresample/swresample.h> // sondh this is so stupid
 #include <libavutil/avstring.h>
 #include <libavutil/pixfmt.h>
 #include <libavutil/log.h>
@@ -110,7 +114,7 @@ SDL_Surface     *screen;
 // Since we only have one decoding thread, the Big Struct can be global in case we need it.
 VideoState *global_video_state;
 AVPacket flush_pkt;
-uint g_ret;
+unsigned int g_ret;
 
 int g_video_width, g_video_height;
 char g_video_resized;
@@ -930,6 +934,8 @@ int decode_thread(void *arg) {
     int video_index = -1;
     int audio_index = -1;
     int i;
+    
+    static const AVIOInterruptCB int_cb = { decode_interrupt_cb, NULL };
 
     is->videoStream=-1;
     is->audioStream=-1;
@@ -941,7 +947,6 @@ int decode_thread(void *arg) {
         return -1; // Couldn't open file
     }
 
-    static const AVIOInterruptCB int_cb= {decode_interrupt_cb, NULL};
     pFormatCtx->interrupt_callback = int_cb;
 
     is->pFormatCtx = pFormatCtx;

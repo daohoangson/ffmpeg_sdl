@@ -1,0 +1,6 @@
+.DS_Store
+*.mp4
+
+*.dSYM
+
+build/*/ffmpeg_sdl

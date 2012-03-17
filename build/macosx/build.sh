@@ -1,6 +1,6 @@
 gcc -g -o ffmpeg_sdl \
 	-I"../../lib/ffmpeg/include" -I"../../lib/sdl/include" \
-	-L"../../lib/ffmpeg/lib-macosx" -lavcodec -lavformat -lavutil -lswscale \
+	-L"../../lib/ffmpeg/lib-macosx" -lavcodec -lavformat -lavutil -lswscale -lswresample \
 	-lz -lm -lbz2 -framework VideoDecodeAcceleration -framework QuartzCore \
 	-L"../../lib/sdl/lib-macosx" -lSDLmain -lSDL \
 	-L/usr/X11/lib -lX11 \
